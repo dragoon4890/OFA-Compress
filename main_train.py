@@ -18,23 +18,23 @@ from architecture_configs import architecture_configs_dict
 from ofa.configuration_ofa import OFAConfig
 
 
-
-
 def args_check(args, logger):
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
         logger.info("Output directory () already exists and is not empty.")
     if args.gradient_accumulation_steps < 1:
         raise ValueError(
-            "Invalid gradient_accumulation_steps parameter: {}, should be >= 1"
-            .format(args.gradient_accumulation_steps))
+            "Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
+                args.gradient_accumulation_steps
+            )
+        )
 
     if not args.do_train and not args.do_predict:
-        raise ValueError(
-            "At least one of `do_train` or `do_predict` must be True.")
+        raise ValueError("At least one of `do_train` or `do_predict` must be True.")
 
     if args.local_rank == -1:
-        device = torch.device("cuda" if torch.cuda.is_available()
-                              and not args.no_cuda else "cpu")
+        device = torch.device(
+            "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
+        )
         n_gpu = torch.cuda.device_count() if not args.no_cuda else 0
     else:
         torch.cuda.set_device(args.local_rank)
@@ -48,13 +48,14 @@ def args_check(args, logger):
 
 def main():
     import PIL
+
     print("PIL version", PIL.__version__)
     print("CUDA device name", torch.cuda.get_device_name(0))
     # ---------- SETTINGS ----------------
     torch.backends.cudnn.enabled = True
     args = get_args()
 
-    cur_time = datetime.strftime(datetime.now(), '%m%d_%H%M')
+    cur_time = datetime.strftime(datetime.now(), "%m%d_%H%M")
     if args.postfix is not None:
         args.output_dir = os.path.join(args.output_dir, args.postfix)
     folder_name = args.task + "/" + cur_time
@@ -64,32 +65,33 @@ def main():
     os.makedirs(log_output_dir, exist_ok=True)
     if args.rank == 0:
         logging.basicConfig(
-            format='%(asctime)s - %(levelname)s - %(name)s -  %(message)s',
-            datefmt='%Y/%m/%d %H:%M:%S',
+            format="%(asctime)s - %(levelname)s - %(name)s -  %(message)s",
+            datefmt="%Y/%m/%d %H:%M:%S",
             handlers=[
                 logging.StreamHandler(),
                 logging.FileHandler(
-                    os.path.join(log_output_dir, f'log_{args.rank}.txt'))
+                    os.path.join(log_output_dir, f"log_{args.rank}.txt")
+                ),
             ],
-            level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN)
+            level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN,
+        )
         logger = logging.getLogger("Main")
         print(logger)
     else:
         logging.basicConfig(
-            format='%(asctime)s - %(levelname)s - %(name)s -  %(message)s',
-            datefmt='%Y/%m/%d %H:%M:%S',
+            format="%(asctime)s - %(levelname)s - %(name)s -  %(message)s",
+            datefmt="%Y/%m/%d %H:%M:%S",
             handlers=[logging.StreamHandler()],
-            level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN)
+            level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN,
+        )
         logger = logging.getLogger("Main")
         print(logger)
-
 
     logger.info("---------- SETTINGS ----------------")
     initialize_distributed(args)
 
-
     logger.warning(
-        f'args.world_size = {args.world_size}, args.rank ={args.rank}, args.local_rank = {args.local_rank}'
+        f"args.world_size = {args.world_size}, args.rank ={args.rank}, args.local_rank = {args.local_rank}"
     )
     device, n_gpu = args_check(args, logger)
     if args.local_rank in [-1, 0]:
@@ -109,38 +111,45 @@ def main():
     logger.info("---------- DATA LOADER ----------------")
 
     train_loader, val_loader = pipeline.get_data_loader(args, logger)
-    logger.info(f'train loader: {train_loader}, length: {len(train_loader)}')
+    logger.info(f"train loader: {train_loader}, length: {len(train_loader)}")
     if len(args.train_dataset) > 1:
-        args.num_train_steps = sum([len(
-            train_loader[i]) for i in range(len(args.train_dataset))]) // args.gradient_accumulation_steps * args.num_epochs
+        args.num_train_steps = (
+            sum([len(train_loader[i]) for i in range(len(args.train_dataset))])
+            // args.gradient_accumulation_steps
+            * args.num_epochs
+        )
     else:
-        args.num_train_steps = len(
-            train_loader) // args.gradient_accumulation_steps * args.num_epochs
+        args.num_train_steps = (
+            len(train_loader[0]) // args.gradient_accumulation_steps * args.num_epochs
+        )
 
     # ---------- MODELs ----------------
     logger.info("----------- MODELS ------------")
 
-    if args.init_method == 'load_pretrain':
+    if args.init_method == "load_pretrain":
         model_path = args.load
         logger.info(f"Load model from {model_path}.")
-        if args.generator_version == 'fairseq':
+        if args.generator_version == "fairseq":
             model = OFAModel.from_pretrained(model_path, use_cache=True)
         else:
             model = OFAModel.from_pretrained(model_path, use_cache=False)
-    elif args.init_method == 'random':
+    elif args.init_method == "random":
         configs = architecture_configs_dict[args.student_model_config]
-        config = configs['config']
-        if args.generator_version == 'fairseq':
+        config = configs["config"]
+        if args.generator_version == "fairseq":
             model_config = OFAConfig(**config, use_cache=True)
         else:
             model_config = OFAConfig(**config, use_cache=False)
         model = OFAModel(model_config)
     else:
         raise NotImplementedError(f"Illegal init_method {args.init_method}")
-    logger.info(f'Config of model: {model.config.to_dict()}')
-    logger.info(' Number of model parameters on rank {}: {}'.format(
-        torch.distributed.get_rank(),
-        sum([p.nelement() for p in model.parameters()])))
+    logger.info(f"Config of model: {model.config.to_dict()}")
+    logger.info(
+        " Number of model parameters on rank {}: {}".format(
+            torch.distributed.get_rank(),
+            sum([p.nelement() for p in model.parameters()]),
+        )
+    )
     model.to(device)
     adaptor = pipeline.get_adaptors(args)
 
@@ -152,7 +161,8 @@ def main():
             model.parameters(),
             lr=args.lr,
             weight_decay=args.weight_decay,
-            correct_bias=False)
+            correct_bias=False,
+        )
 
         scheduler_class, scheduler_args = pipeline.get_schedule(args)
         if args.ckpt_frequency > -1:
@@ -163,7 +173,8 @@ def main():
                 output_dir=args.output_dir,
                 device=args.device,
                 fp16=args.fp16,
-                local_rank=args.local_rank)
+                local_rank=args.local_rank,
+            )
         else:
             train_config = TrainingConfig(
                 gradient_accumulation_steps=args.gradient_accumulation_steps,
@@ -172,31 +183,32 @@ def main():
                 output_dir=args.output_dir,
                 device=args.device,
                 fp16=args.fp16,
-                local_rank=args.local_rank)
+                local_rank=args.local_rank,
+            )
 
         logger.info(f"Train_config:\n {train_config}")
         trainer = BasicTrainer(train_config, model, adaptor)
         # ---------- EVAL ----------------
         args.evaluate_idx = 0
-        callback_func = partial(ddp_evaluate,
-                                eval_dataloader=val_loader,
-                                args=args,
-                                logger=logger)
-
+        callback_func = partial(
+            ddp_evaluate, eval_dataloader=val_loader, args=args, logger=logger
+        )
 
         def batch_postprocessor(batch):
             return batch
 
         with trainer:
-            trainer.train(optimizer,
-                            scheduler_class=scheduler_class,
-                            scheduler_args=scheduler_args,
-                            max_grad_norm=args.clip_grad,
-                            dataloader=train_loader,
-                            num_epochs=args.num_epochs,
-                            callback=callback_func,
-                            batch_postprocessor=batch_postprocessor)
+            trainer.train(
+                optimizer,
+                scheduler_class=scheduler_class,
+                scheduler_args=scheduler_args,
+                max_grad_norm=args.clip_grad,
+                dataloader=train_loader,
+                num_epochs=args.num_epochs,
+                callback=callback_func,
+                batch_postprocessor=batch_postprocessor,
+            )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
