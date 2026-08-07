@@ -25,14 +25,14 @@ from torch.nn import functional as F
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
 from transformers.activations import ACT2FN
-from transformers.file_utils import (
+from transformers.utils import (
     add_code_sample_docstrings,
     add_end_docstrings,
     add_start_docstrings,
     add_start_docstrings_to_model_forward,
     replace_return_docstrings,
 )
-from transformers.file_utils import ModelOutput
+from transformers.utils import ModelOutput
 from transformers.modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
     Seq2SeqLMOutput,
@@ -1957,7 +1957,7 @@ class OFAModel(OFAPreTrainedModel):
         return shift_tokens_right(labels, self.config.pad_token_id, self.config.decoder_start_token_id)
 
     def _prepare_encoder_decoder_kwargs_for_generation(
-        self, inputs_tensor: torch.Tensor, model_kwargs, model_input_name: Optional[str] = None
+        self, inputs_tensor: torch.Tensor, model_kwargs, model_input_name: Optional[str] = None, generation_config=None
     ):
         # 1. get encoder
         encoder = self.get_encoder()
