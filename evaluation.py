@@ -112,7 +112,7 @@ def evaluate(model, step, eval_dataloader, args, logger):
                 args.best_step = step
                 save_checkpoint(step, model, args=args, best=True)
         if torch.distributed.get_rank() == 0:
-            model.save_pretrained(os.path.join(args.output_dir, "saved_mode_step"))
+            model.save_pretrained(os.path.join(args.output_dir, "saved_mode_step"), safe_serialization=False)
             print(
                 'global rank {} is saving checkpoint at iteration {:7d}'.
                     format(torch.distributed.get_rank(), step))
@@ -205,7 +205,7 @@ def evaluate(model, step, eval_dataloader, args, logger):
                 args.best_step = step
                 save_checkpoint(step, model, args=args, best=True)
         if torch.distributed.get_rank() == 0:
-            model.save_pretrained(os.path.join(args.output_dir, "saved_mode_step"))
+            model.save_pretrained(os.path.join(args.output_dir, "saved_mode_step"), safe_serialization=False)
             print(
                 'global rank {} is saving checkpoint at iteration {:7d}'.
                     format(torch.distributed.get_rank(), step))
@@ -307,7 +307,7 @@ def evaluate(model, step, eval_dataloader, args, logger):
                 args.best_step = step
                 save_checkpoint(step, model, args=args, best=True)
         if torch.distributed.get_rank() == 0:
-            model.save_pretrained(os.path.join(args.output_dir, "saved_mode_step"))
+            model.save_pretrained(os.path.join(args.output_dir, "saved_mode_step"), safe_serialization=False)
             print(
                 'global rank {} is saving checkpoint at iteration {:7d}'.
                     format(torch.distributed.get_rank(), step))
@@ -421,7 +421,7 @@ def evaluate(model, step, eval_dataloader, args, logger):
                 args.best_step = step
                 save_checkpoint(step, model, args=args, best=True)
         if torch.distributed.get_rank() == 0:
-            model.save_pretrained(os.path.join(args.output_dir, "saved_mode_step"))
+            model.save_pretrained(os.path.join(args.output_dir, "saved_mode_step"), safe_serialization=False)
             print(
                 'global rank {} is saving checkpoint at iteration {:7d}'.
                     format(torch.distributed.get_rank(), step))
@@ -450,7 +450,7 @@ def evaluate(model, step, eval_dataloader, args, logger):
             save_checkpoint(step, model, args=args, best=True)
         if torch.distributed.get_rank() == 0:
             idx = args.evaluate_idx % args.keep_last_ckpt_num
-            model.save_pretrained(os.path.join(args.output_dir, "saved_mode_step_%d" % idx))
+            model.save_pretrained(os.path.join(args.output_dir, "saved_mode_step_%d" % idx), safe_serialization=False)
             print(
                 'global rank {} is saving checkpoint at iteration {:7d}'.
                     format(torch.distributed.get_rank(), step))

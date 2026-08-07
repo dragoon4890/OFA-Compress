@@ -194,7 +194,7 @@ def save_checkpoint(iteration, model, args, bucket=None, best=False):
             sd = {}
             sd['iteration'] = iteration
             sd['module'] = model.state_dict()
-            model.save_pretrained(os.path.join(args.output_dir, "saved_mode"))
+            model.save_pretrained(os.path.join(args.output_dir, "saved_mode"), safe_serialization=False)
 
             ensure_directory_exists(checkpoint_name)
             # torch.save(sd, checkpoint_name)
