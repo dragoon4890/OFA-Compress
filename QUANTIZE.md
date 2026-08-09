@@ -1,10 +1,13 @@
 # OFA-Tiny weight inspection (Colab)
 
 Analysis only — cells 0–8 are read-only (nothing shrunk, converted, or saved).
-Cells 9–11 are the fp32-slim shrink: Cell 9 writes `ofa-tiny-slim/`, Cells 10–11
-verify it (10 = structural, 11 = inference). Cell 12 uploads it to Hugging Face
-(weights-only, run once); Cell 13 is the fresh-Colab reuse path. Each cell does
-exactly one thing (SRP); run top to bottom.
+Cells 9–13 are the fp32-slim shrink: Cell 9 writes `ofa-tiny-slim/`, Cells 10–11
+verify it (10 = structural, 11 = inference), Cell 12 uploads it (weights-only),
+Cell 13 is the fresh-Colab reuse path. Cells 14–17 are the fp16 shrink from slim:
+14 builds `ofa-tiny-fp16/`, 15–16 verify (structural / inference), 17 uploads it.
+Cell 18 is the read-only SVD rank-spectrum check that decides whether low-rank
+factorization (Cells 19+) is worth pursuing.
+Each cell does exactly one thing (SRP); run top to bottom.
 
 Checkpoint: `OFA-Sys/ofa-tiny` (`pytorch_model.bin`, ~322 MB fp32, ~80M params).
 Config: d_model=256, 4+4 layers, ffn=1024, 4 heads, vocab=59457, resnet50.
@@ -476,4 +479,202 @@ with torch.no_grad():
                          num_beams=5, max_length=16, min_length=1,
                          no_repeat_ngram_size=3)
 print("caption:", tok.batch_decode(gen, skip_special_tokens=True)[0])
+```
+
+---
+
+## Cell 14 — Build fp16 checkpoint (from slim)
+
+Loads `ofa-tiny-slim/pytorch_model.bin` (already deduped + buffers dropped), casts
+every tensor to half **except** BN `running_mean`/`running_var` (kept fp32) and
+`num_batches_tracked` (kept int64). Saves `ofa-tiny-fp16/pytorch_model.bin`
+(~67 MB). Key set is identical to slim.
+
+```python
+import os, shutil, torch
+
+sd = torch.load("ofa-tiny-slim/pytorch_model.bin", map_location="cpu")
+
+out_sd = {}
+for k, v in sd.items():
+    if k.endswith("running_mean") or k.endswith("running_var"):
+        out_sd[k] = v                      # keep BN stats fp32
+    elif k.endswith("num_batches_tracked"):
+        out_sd[k] = v                      # keep scalar int64
+    else:
+        out_sd[k] = v.half()               # cast learned weights to fp16
+
+os.makedirs("ofa-tiny-fp16", exist_ok=True)
+for f in ["config.json", "vocab.json", "merges.txt"]:
+    src = os.path.join("ofa-tiny", f)
+    if os.path.exists(src):
+        shutil.copy(src, os.path.join("ofa-tiny-fp16", f))
+
+torch.save(out_sd, "ofa-tiny-fp16/pytorch_model.bin")
+mb = sum(v.numel() * v.element_size() for v in out_sd.values()) / 1e6
+print(f"saved {len(out_sd)} tensors -> ofa-tiny-fp16/pytorch_model.bin  ({mb:.1f} MB)")
+```
+
+---
+
+## Cell 15 — Structural verify fp16 (no ofa/ needed)
+
+Reloads the fp16 state dict and checks: key set matches slim exactly, learned
+weights are fp16, BN stats stay fp32.
+
+```python
+sd_slim = torch.load("ofa-tiny-slim/pytorch_model.bin", map_location="cpu")
+sd_half = torch.load("ofa-tiny-fp16/pytorch_model.bin", map_location="cpu")
+
+print(f"key set identical to slim: {set(sd_slim) == set(sd_half)}")
+
+dtypes = {}
+for k, v in sd_half.items():
+    dtypes[str(v.dtype)] = dtypes.get(str(v.dtype), 0) + 1
+print("dtype counts in fp16 checkpoint:", dtypes)
+
+bad = [k for k, v in sd_half.items()
+       if not (k.endswith("running_mean") or k.endswith("running_var")
+               or k.endswith("num_batches_tracked")) and v.dtype != torch.float16]
+print(f"learned weights NOT fp16: {bad or 'none'}")
+
+mb = sum(v.numel() * v.element_size() for v in sd_half.values()) / 1e6
+print(f"size: {mb:.1f} MB   ({len(sd_half)} tensors)")
+```
+
+---
+
+## Cell 16 — Inference verify fp16 (needs ofa/ + Cell 0b patches)
+
+Loads `ofa-tiny-fp16` with the vendored `OFAModel` and captions the demo image.
+The fp16 caption must equal the fp32 caption. CPU caveat: fp16 matmul on CPU can be
+slow or hit unsupported ops — if it errors, the fallback note tells you to load with
+`torch_dtype=torch.float32` on CPU (ship fp16 for size regardless).
+
+```python
+import os, torch
+from PIL import Image
+from torchvision import transforms
+
+if not os.path.isdir("ofa"):
+    print("ofa/ not in Colab -> copy the repo's ofa/ folder (or clone the fork), re-run Cell 0b, then this cell")
+else:
+    from ofa.tokenization_ofa import OFATokenizer
+    from ofa.modeling_ofa import OFAModel
+
+    image_path = "ofa-tiny/caption_demo.png"
+    if not os.path.exists(image_path):
+        image_path = "resources/caption_demo.png"
+
+    tfm = transforms.Compose([
+        lambda im: im.convert("RGB"),
+        transforms.Resize((256, 256), interpolation=transforms.InterpolationMode.BICUBIC),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+    ])
+    prompt = " what does the image describe?"
+
+    def caption(ckpt, **kw):
+        tok = OFATokenizer.from_pretrained(ckpt)
+        model = OFAModel.from_pretrained(ckpt, **kw).eval()
+        img = tfm(Image.open(image_path)).unsqueeze(0)
+        src = tok(prompt, return_tensors="pt", add_special_tokens=False).input_ids.squeeze(0)
+        src = torch.cat([torch.tensor([tok.bos_token_id]), src,
+                         torch.tensor([tok.eos_token_id])]).unsqueeze(0)
+        with torch.no_grad():
+            gen = model.generate(input_ids=src, patch_images=img,
+                                 patch_masks=torch.tensor([True]),
+                                 num_beams=5, max_length=16, min_length=1,
+                                 no_repeat_ngram_size=3)
+        return tok.batch_decode(gen, skip_special_tokens=True)[0]
+
+    c32 = caption("ofa-tiny")
+    try:
+        cf16 = caption("ofa-tiny-fp16")
+        print(f"fp32 : {c32}")
+        print(f"fp16 : {cf16}")
+        print(f"match: {c32 == cf16}")
+    except Exception as e:
+        print("fp16 inference failed on this device:")
+        print("  ", type(e).__name__, str(e)[:200])
+        print("NOTE: on CPU, load with OFAModel.from_pretrained('ofa-tiny-fp16', torch_dtype=torch.float32)")
+```
+
+---
+
+## Cell 17 — Upload fp16 checkpoint to Hugging Face
+
+Publishes `ofa-tiny-fp16/` as a **weights-only** model repo (~67 MB). Run once.
+
+```python
+from huggingface_hub import login, HfApi
+
+REPO_ID = "dragoon49/ofa-tiny-fp16"
+
+login()                      # paste an HF write token when prompted
+api = HfApi()
+api.create_repo(REPO_ID, repo_type="model", exist_ok=True)
+api.upload_folder(repo_id=REPO_ID, folder_path="ofa-tiny-fp16")
+print("files on repo:")
+for f in api.list_repo_files(REPO_ID):
+    print("  ", f)
+```
+
+---
+
+## Cell 18 — Rank spectrum (SVD viability check)
+
+Read-only. For every compressible weight (Linear, ResNet convs, embeddings) prints
+the rank needed to capture 90/95/99% of the singular-value energy, plus the fp16 MB
+at full vs at rank-95 and the saving. If `r95 ≈ full` everywhere, the spectrum is
+flat and SVD low-rank has little headroom (skip Cells 19+; quantization is the path).
+
+```python
+import torch
+
+sd = torch.load("ofa-tiny-slim/pytorch_model.bin", map_location="cpu")
+
+def energy_rank(w, thresh):
+    s = torch.linalg.svdvals(w.float())
+    tot = (s * s).sum().item()
+    if tot == 0.0:
+        return 0
+    cum = 0.0
+    for r, v in enumerate(s.tolist(), start=1):
+        cum += v * v
+        if cum / tot >= thresh:
+            return r
+    return len(s)
+
+is_emb = lambda k: any(x in k for x in
+    ["embed_tokens", "embed_positions", "embed_image_positions", "type_embedding"])
+
+rows = []
+for k, v in sd.items():
+    if not k.endswith(".weight"):
+        continue
+    if v.ndim == 2 and not is_emb(k):
+        tag = "linear"
+    elif v.ndim == 4 and ".conv" in k:
+        tag = "conv"
+        v = v.reshape(v.shape[0], -1)
+    elif is_emb(k):
+        tag = "embedding"
+    else:
+        continue
+    rows.append((k, tag, v, energy_rank(v, 0.90), energy_rank(v, 0.95), energy_rank(v, 0.99)))
+
+print(f"{'key':46s} {'type':9s} {'full':>5s} {'r90':>5s} {'r95':>5s} {'r99':>5s} {'fp16MB':>7s} {'r95MB':>7s} {'save':>6s}")
+tot_full = tot_95 = 0.0
+for k, tag, v, r90, r95, r99 in rows:
+    n, m = v.shape
+    full = min(n, m)
+    mb_full = n * m * 2 / 1e6
+    mb_95 = (n * r95 + r95 * m) * 2 / 1e6
+    tot_full += mb_full
+    tot_95 += mb_95
+    print(f"{k:46s} {tag:9s} {full:5d} {r90:5d} {r95:5d} {r99:5d} {mb_full:7.1f} {mb_95:7.1f} {mb_full - mb_95:6.1f}")
+print(f"{'TOTAL':46s} {'':9s} {'':5s} {'':5s} {'':5s} {'':5s} {tot_full:7.1f} {tot_95:7.1f} {tot_full - tot_95:6.1f}")
+print(f"r95 savings: {(tot_full - tot_95) / tot_full * 100:.0f}% of this block's fp16 size")
+print("if r95 ~= full on most rows -> flat spectrum, little low-rank headroom")
 ```
