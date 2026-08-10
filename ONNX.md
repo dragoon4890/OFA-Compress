@@ -43,7 +43,7 @@ Run cells top to bottom. Everything is copy-paste into a Colab notebook.
 ```python
 !git clone https://github.com/dragoon4890/OFA-Compress.git ofa-repo
 %cd ofa-repo
-!pip install -q transformers==4.44.2 onnx onnxruntime onnxconverter_common
+!pip install -q transformers==4.44.2 onnx onnxruntime onnxconverter_common onnxscript
 ```
 
 ---
